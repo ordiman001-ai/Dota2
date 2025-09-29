@@ -1,0 +1,1339 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Mini-Dota: Тронная Война (Исправлено)</title>
+    <!-- Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@100..900&display=swap');
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #1a202c; /* Темный фон */
+        }
+        #gameContainer {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            padding: 20px;
+        }
+        canvas {
+            border: 4px solid #4a5568;
+            border-radius: 12px;
+            background-color: #0d1117; /* Темный фон карты */
+            cursor: crosshair;
+            box-shadow: 0 10px 15px rgba(0, 0, 0, 0.5);
+        }
+        .ui-panel {
+            background-color: #2d3748;
+            border-radius: 8px;
+            padding: 10px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.3);
+            margin-top: 10px;
+        }
+        .ability-button {
+            width: 50px;
+            height: 50px;
+            border-radius: 8px;
+            font-size: 1.2rem;
+            font-weight: bold;
+            color: #fff;
+            border: 2px solid #a0aec0;
+            background-color: #4a5568;
+            transition: all 0.1s;
+            position: relative;
+            cursor: pointer;
+        }
+        .ability-button:hover:not(:disabled) {
+            background-color: #636b77;
+            border-color: #fff;
+            transform: translateY(-1px);
+        }
+        .ability-button:disabled {
+            cursor: not-allowed;
+            opacity: 0.5;
+        }
+        .cooldown-overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0, 0, 0, 0.7);
+            color: white;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            font-size: 1rem;
+            border-radius: 6px;
+        }
+        .cast-overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(255, 255, 0, 0.5); /* Желтый индикатор каста */
+            color: black;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            font-size: 1rem;
+            border-radius: 6px;
+        }
+    </style>
+</head>
+<body class="min-h-screen flex items-center justify-center">
+
+    <div id="gameContainer" class="w-full max-w-4xl">
+        <h1 class="text-3xl font-bold text-yellow-400 mb-4">Mini-Dota: Тронная Война</h1>
+
+        <!-- Основной UI: Статус, Золото, Магазин -->
+        <div class="flex justify-between w-full mb-4 space-x-4">
+
+            <!-- Панель Статуса Героя -->
+            <div class="ui-panel flex-1 text-white">
+                <h2 class="text-xl font-semibold mb-2 text-blue-300">Герой: Светлый Маг</h2>
+                <div id="heroStats" class="space-y-1 text-sm">
+                    <!-- Статистика обновляется JS -->
+                </div>
+            </div>
+
+            <!-- Магазин -->
+            <div id="shop" class="ui-panel w-64 text-white">
+                <h2 class="text-xl font-semibold mb-2 text-green-300">Магазин (База)</h2>
+                <div id="shopItems" class="space-y-2">
+                    <!-- Предметы магазина заполняются JS -->
+                </div>
+            </div>
+
+        </div>
+
+        <!-- Canvas Game World -->
+        <canvas id="gameCanvas" width="800" height="400"></canvas>
+
+        <!-- Панель Способностей -->
+        <div class="ui-panel flex justify-center space-x-4 mt-4">
+            <h3 class="text-lg font-medium text-gray-300 mr-4">Способности:</h3>
+            <button class="ability-button bg-green-600 border-green-400" id="abilityQ" data-ability="Q" title="Q: Исцеление (Мгновенное)">Q</button>
+            <button class="ability-button bg-red-800 border-red-400" id="abilityW" data-ability="W" title="W: Метеор (Урон по крипам в области, 0.5с каст)">W</button>
+            <button class="ability-button bg-purple-600 border-purple-400" id="abilityE" data-ability="E" title="E: Призыв Союзников (Мгновенное)">E</button>
+            <button class="ability-button bg-cyan-600 border-cyan-400" id="abilityR" data-ability="R" title="R: Ультимативный Удар (Урон по башням, 0.5с каст)">R</button>
+            <button class="ability-button bg-orange-500 border-orange-400" id="abilityD" data-ability="D" title="D: Призыв Сильного Союзника (Требуется предмет)" disabled>D</button>
+        </div>
+
+        <!-- Панель сообщений -->
+        <div id="messageBox" class="ui-panel w-full text-center text-red-400 font-bold hidden"></div>
+
+        <!-- Кнопка рестарта -->
+        <button id="restartButton" onclick="restartGame()" class="mt-4 bg-yellow-500 hover:bg-yellow-600 text-gray-900 font-bold py-2 px-4 rounded transition duration-150 hidden">Начать новую игру</button>
+
+    </div>
+
+    <script>
+        // Глобальные переменные для Canvas
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        const MAP_WIDTH = canvas.width;
+        const MAP_HEIGHT = canvas.height;
+        let lastTime = 0;
+        let gameActive = true;
+        let gameTime = 0; // ИСПРАВЛЕНИЕ: Унифицированный счетчик времени игры в мс
+        
+        // --- Константы игры ---
+        const LANE_Y = MAP_HEIGHT / 2;
+        const SPAWN_INTERVAL = 10000; // 10 секунд
+        let lastSpawnTime = 0;
+        const TEAM_RADIANT = 'radiant'; // Свет
+        const TEAM_DIRE = 'dire';   // Тьма
+        const SIGHT_RANGE = 500; // Область видимости крипов
+
+        // --- Позиции на карте ---
+        const RADIANT_SPAWN = { x: 50, y: LANE_Y };
+        const DIRE_SPAWN = { x: MAP_WIDTH - 50, y: LANE_Y };
+        
+        // Главные структуры (Трон)
+        const RADIANT_THRONE = { x: 30, y: LANE_Y, hp: 3000, maxHp: 3000, size: 40, color: '#38a169', team: TEAM_RADIANT, isThrone: true, radius: 20 };
+        const DIRE_THRONE = { x: MAP_WIDTH - 30, y: LANE_Y, hp: 3000, maxHp: 3000, size: 40, color: '#e53e3e', team: TEAM_DIRE, isThrone: true, radius: 20 };
+        
+        // Исходные башни (T1 и T2)
+        const INITIAL_TOWERS = [
+            // Башни Света
+            { x: 150, y: LANE_Y, hp: 1500, range: 150, dmg: 50, team: TEAM_RADIANT },
+            { x: 300, y: LANE_Y, hp: 1500, range: 150, dmg: 50, team: TEAM_RADIANT },
+            // Башни Тьмы
+            { x: MAP_WIDTH - 150, y: LANE_Y, hp: 1500, range: 150, dmg: 50, team: TEAM_DIRE },
+            { x: MAP_WIDTH - 300, y: LANE_Y, hp: 1500, range: 150, dmg: 50, team: TEAM_DIRE },
+        ];
+        
+        // --- Игровые коллекции ---
+        let entities = [];
+        let projectiles = [];
+        let towers = []; // Только T1 и T2
+        let delayedEffects = [];
+        let hero;
+
+        // --- Классы ---
+
+        class Vector2 {
+            constructor(x, y) {
+                this.x = x;
+                this.y = y;
+            }
+            distanceTo(other) {
+                return Math.hypot(this.x - other.x, this.y - other.y);
+            }
+            normalize() {
+                const len = this.length();
+                if (len === 0) return new Vector2(0, 0);
+                return new Vector2(this.x / len, this.y / len);
+            }
+            length() {
+                return Math.hypot(this.x, this.y);
+            }
+        }
+
+        class Entity {
+            constructor({ x, y, team, hp, maxHp, moveSpeed, radius, attackDamage, attackRange, goldValue, expValue }) {
+                this.position = new Vector2(x, y);
+                this.team = team;
+                this.hp = hp;
+                this.maxHp = maxHp;
+                this.moveSpeed = moveSpeed;
+                this.radius = radius;
+                this.attackDamage = attackDamage;
+                this.attackRange = attackRange;
+                this.goldValue = goldValue || 0;
+                this.expValue = expValue || 0;
+                this.target = null;
+                this.attackCooldown = 0;
+                this.isDead = false;
+            }
+
+            takeDamage(damage) {
+                this.hp -= damage;
+                if (this.hp <= 0) {
+                    this.hp = 0;
+                    return true;
+                }
+                return false;
+            }
+
+            drawHealthBar() {
+                const barWidth = this.radius * 2;
+                const barHeight = 4;
+                const healthRatio = this.hp / this.maxHp;
+
+                ctx.fillStyle = 'black';
+                ctx.fillRect(this.position.x - this.radius, this.position.y - this.radius - barHeight - 2, barWidth, barHeight);
+
+                // Цвет полосы здоровья
+                let color = '#ecc94b'; // Нейтральный
+                if (this.team === TEAM_RADIANT) color = '#48bb78';
+                else if (this.team === TEAM_DIRE) color = '#f56565';
+                
+                ctx.fillStyle = color;
+
+                ctx.fillRect(this.position.x - this.radius, this.position.y - this.radius - barHeight - 2, barWidth * healthRatio, barHeight);
+            }
+        }
+
+        class Creep extends Entity {
+            constructor({ x, y, team, type, laneTarget }) {
+                const stats = type === 'melee' ?
+                    { hp: 500, maxHp: 500, moveSpeed: 30, radius: 8, attackDamage: 15, attackRange: 50, goldValue: 20, expValue: 50 } :
+                    { hp: 300, maxHp: 300, moveSpeed: 35, radius: 8, attackDamage: 20, attackRange: 150, goldValue: 25, expValue: 60 };
+
+                super({ ...stats, x, y, team });
+                this.type = type;
+                this.laneTarget = laneTarget || (team === TEAM_RADIANT ? DIRE_SPAWN : RADIANT_SPAWN);
+            }
+
+            findTarget() {
+                const enemyCreeps = entities.filter(e => e.team !== this.team && e.hp > 0 && (e instanceof Creep || e instanceof AllyCreep));
+                const enemyHero = entities.find(e => e.team !== this.team && e.hp > 0 && e instanceof Hero);
+                const enemyTowers = towers.filter(t => t.team !== this.team && t.hp > 0);
+                const enemyThrone = this.team === TEAM_RADIANT ? DIRE_THRONE : RADIANT_THRONE;
+                
+                // 1. Приоритет: Крипы противника в радиусе видимости (SIGHT_RANGE)
+                let targets = enemyCreeps.filter(e => this.position.distanceTo(e.position) < SIGHT_RANGE);
+                if (targets.length > 0) {
+                    return targets.sort((a, b) => this.position.distanceTo(a.position) - this.position.distanceTo(b.position))[0];
+                }
+                
+                // 2. Приоритет: Герой противника в радиусе видимости
+                if (enemyHero && this.position.distanceTo(enemyHero.position) < SIGHT_RANGE) {
+                    return enemyHero;
+                }
+                
+                // 3. Приоритет: Ближайшая Башня/Трон
+                targets = [...enemyTowers, enemyThrone].filter(t => this.position.distanceTo(t.position || t) < SIGHT_RANGE * 2); 
+                if (targets.length > 0) {
+                    return targets.sort((a, b) => this.position.distanceTo(a.position || a) - this.position.distanceTo(b.position || b))[0];
+                }
+                
+                return null;
+            }
+
+            update(dt) {
+                this.attackCooldown = Math.max(0, this.attackCooldown - dt);
+
+                this.target = this.findTarget();
+
+                if (this.target) {
+                    const targetPos = this.target.position || this.target;
+                    const targetRadius = this.target.radius || 0;
+                    const dist = this.position.distanceTo(targetPos);
+
+                    if (dist < this.attackRange + targetRadius) {
+                        // Атака
+                        if (this.attackCooldown === 0) {
+                            this.attack(this.target);
+                            this.attackCooldown = 1500;
+                        }
+                    } else {
+                        // Движение к цели
+                        const direction = new Vector2(
+                            targetPos.x - this.position.x,
+                            targetPos.y - this.position.y
+                        ).normalize();
+                        this.position.x += direction.x * this.moveSpeed * (dt / 1000);
+                        this.position.y += direction.y * direction.y * this.moveSpeed * (dt / 1000);
+                    }
+                } else {
+                    // Движение по линии к точке спавна противника (по умолчанию)
+                    const dist = this.position.distanceTo(this.laneTarget);
+                    if (dist > 5) {
+                        const direction = new Vector2(
+                            this.laneTarget.x - this.position.x,
+                            this.laneTarget.y - this.position.y
+                        ).normalize();
+                        this.position.x += direction.x * this.moveSpeed * (dt / 1000);
+                        this.position.y += direction.y * this.moveSpeed * (dt / 1000);
+                    }
+                }
+            }
+
+            attack(target) {
+                const isThrone = target.isThrone;
+                let isDead = false;
+
+                if (isThrone) {
+                    target.hp -= this.attackDamage;
+                    isDead = target.hp <= 0;
+                } else {
+                    isDead = target.takeDamage(this.attackDamage);
+                }
+
+                if (isDead) {
+                    this.target = null;
+                }
+
+                projectiles.push({
+                    start: new Vector2(this.position.x, this.position.y),
+                    end: new Vector2((target.position || target).x, (target.position || target).y),
+                    color: this.team === TEAM_RADIANT ? '#48bb78' : '#f56565',
+                    time: 0,
+                    duration: 100
+                });
+            }
+
+            draw() {
+                ctx.fillStyle = this.team === TEAM_RADIANT ? '#48bb78' : this.team === TEAM_DIRE ? '#f56565' : '#ecc94b';
+                ctx.beginPath();
+                ctx.arc(this.position.x, this.position.y, this.radius, 0, Math.PI * 2);
+                ctx.fill();
+                this.drawHealthBar();
+            }
+        }
+        
+        // Крипы-союзники (E) - атакуют башни
+        class AllyCreep extends Creep {
+            constructor({ x, y }) {
+                // Приоритет: Tower -> Throne -> Creep/Hero
+                super({ 
+                    x, y, team: TEAM_RADIANT, type: 'melee', 
+                    laneTarget: DIRE_SPAWN // Двигаться к Тьме
+                });
+                this.maxHp = 400; this.hp = 400;
+                this.attackDamage = 35;
+                this.radius = 9;
+                this.moveSpeed = 40;
+                this.goldValue = 0;
+            }
+            
+            findTarget() {
+                // 1. Найти ближайшую вражескую Башню/Трон
+                const targets = towers.filter(t => t.team === TEAM_DIRE && t.hp > 0).concat([DIRE_THRONE]);
+                
+                let closestStructure = targets.sort((a, b) => this.position.distanceTo(a.position || a) - this.position.distanceTo(b.position || b))[0];
+                
+                // Если структура в радиусе 1000, атакуем ее
+                if (closestStructure && this.position.distanceTo(closestStructure.position || closestStructure) < 1000) return closestStructure;
+                
+                // Если структур нет или они далеко, используем стандартную логику (Крипы -> Герой)
+                return super.findTarget();
+            }
+            
+            draw() {
+                ctx.fillStyle = '#9f7aea'; // Фиолетовый
+                ctx.beginPath();
+                ctx.arc(this.position.x, this.position.y, this.radius, 0, Math.PI * 2);
+                ctx.fill();
+                this.drawHealthBar();
+            }
+        }
+        
+        // Сильный Крип-союзник (D) - атакует башни
+        class StrongAllyCreep extends AllyCreep {
+            constructor({ x, y }) {
+                super({ x, y });
+                // Удвоенные характеристики от базовых крипов (melee: 500hp, 15dmg)
+                this.maxHp = 1000; this.hp = 1000;
+                this.attackDamage = 30;
+                this.radius = 12;
+                this.moveSpeed = 35;
+            }
+            
+            draw() {
+                // Оранжевый
+                ctx.fillStyle = '#f6ad55'; 
+                ctx.beginPath();
+                ctx.arc(this.position.x, this.position.y, this.radius, 0, Math.PI * 2);
+                ctx.fill();
+                
+                ctx.strokeStyle = '#fff';
+                ctx.lineWidth = 2;
+                ctx.stroke();
+                
+                this.drawHealthBar();
+            }
+        }
+
+        // Нейтральный Крип
+        class NeutralCreep extends Entity {
+            constructor({ x, y }) {
+                super({ 
+                    x, y, team: 'neutral',
+                    hp: 800, maxHp: 800, moveSpeed: 0, radius: 15,
+                    attackDamage: 40, attackRange: 100, goldValue: 100, expValue: 150 
+                });
+                this.aggroRange = 250;
+                this.initialPosition = new Vector2(x, y);
+            }
+            
+            findTarget() {
+                // Ищем ближайшего героя или крипа (любой команды) в радиусе агрессии
+                const potentialTargets = entities.filter(e => 
+                    (e instanceof Creep || e instanceof AllyCreep || e instanceof Hero) && 
+                    e.hp > 0 && 
+                    this.position.distanceTo(e.position) < this.aggroRange
+                );
+                
+                if (potentialTargets.length === 0) return null;
+
+                // Находим ближайшую цель
+                return potentialTargets.sort((a, b) => this.position.distanceTo(a.position) - this.position.distanceTo(b.position))[0];
+            }
+            
+            update(dt) {
+                this.attackCooldown = Math.max(0, this.attackCooldown - dt);
+                this.target = this.findTarget();
+
+                if (this.target) {
+                    const targetPos = this.target.position;
+                    const dist = this.position.distanceTo(targetPos);
+                    
+                    if (dist < this.attackRange + this.target.radius) {
+                         // Атака
+                        if (this.attackCooldown === 0) {
+                            this.attack(this.target);
+                            this.attackCooldown = 1500;
+                        }
+                    }
+                }
+                // Нейтралы не двигаются
+                this.position = this.initialPosition; 
+            }
+            
+            attack(target) {
+                target.takeDamage(this.attackDamage);
+
+                projectiles.push({
+                    start: new Vector2(this.position.x, this.position.y),
+                    end: new Vector2(target.position.x, target.position.y),
+                    color: '#ecc94b',
+                    time: 0,
+                    duration: 100
+                });
+            }
+
+            draw() {
+                // Желтый Треугольник
+                ctx.fillStyle = '#ecc94b'; 
+                ctx.beginPath();
+                ctx.moveTo(this.position.x - this.radius, this.position.y + this.radius);
+                ctx.lineTo(this.position.x + this.radius, this.position.y + this.radius);
+                ctx.lineTo(this.position.x, this.position.y - this.radius);
+                ctx.closePath();
+                ctx.fill();
+                this.drawHealthBar();
+            }
+        }
+
+
+        class Tower {
+            constructor({ x, y, hp, range, dmg, team }) {
+                this.position = new Vector2(x, y);
+                this.hp = hp;
+                this.maxHp = hp;
+                this.range = range;
+                this.dmg = dmg;
+                this.team = team;
+                this.radius = 12;
+                this.attackCooldown = 0;
+            }
+            
+            takeDamage(damage) {
+                this.hp -= damage;
+                if (this.hp <= 0) {
+                    this.hp = 0;
+                    return true;
+                }
+                return false;
+            }
+
+            update(dt) {
+                this.attackCooldown = Math.max(0, this.attackCooldown - dt);
+
+                if (this.hp <= 0) return;
+
+                // Приоритет башни: Крипы > Герой
+                const enemiesInRange = entities.filter(e => e.team !== this.team && this.position.distanceTo(e.position) < this.range);
+
+                let target = enemiesInRange.find(e => e instanceof Creep || e instanceof AllyCreep); // Крипы + Союзники
+                if (!target) {
+                    target = enemiesInRange.find(e => e instanceof Hero); // Герой
+                }
+
+                if (target && this.attackCooldown === 0) {
+                    this.attack(target);
+                    this.attackCooldown = 800;
+                }
+            }
+
+            attack(target) {
+                const isDead = target.takeDamage(this.dmg);
+
+                projectiles.push({
+                    start: new Vector2(this.position.x, this.position.y),
+                    end: new Vector2(target.position.x, target.position.y),
+                    color: '#a0aec0',
+                    time: 0,
+                    duration: 150
+                });
+            }
+
+            draw() {
+                const color = this.team === TEAM_RADIANT ? '#3182ce' : '#9b2c2c';
+                ctx.fillStyle = color;
+                ctx.fillRect(this.position.x - 10, this.position.y - 10, 20, 20);
+                ctx.strokeStyle = color;
+                ctx.lineWidth = 2;
+                ctx.strokeRect(this.position.x - 12, this.position.y - 12, 24, 24);
+
+                // Отрисовка здоровья
+                const barWidth = 30;
+                const barHeight = 6;
+                const healthRatio = this.hp / this.maxHp;
+
+                ctx.fillStyle = 'black';
+                ctx.fillRect(this.position.x - barWidth / 2, this.position.y - 20, barWidth, barHeight);
+                ctx.fillStyle = healthRatio > 0.3 ? '#48bb78' : '#f56565';
+                ctx.fillRect(this.position.x - barWidth / 2, this.position.y - 20, barWidth * healthRatio, barHeight);
+            }
+        }
+
+        class Hero extends Entity {
+            constructor({ x, y }) {
+                super({
+                    x, y, team: TEAM_RADIANT,
+                    hp: 500, maxHp: 500, moveSpeed: 100, radius: 10,
+                    attackDamage: 30, attackRange: 150,
+                    goldValue: 0, expValue: 0
+                });
+                this.mana = 300;
+                this.maxMana = 300;
+                this.gold = 600;
+                this.level = 1;
+                this.exp = 0;
+                this.expToNextLevel = 100;
+                this.respawnTimer = 0;
+                this.respawnTime = 3000; // 3 секунды
+
+                this.targetPosition = new Vector2(x, y);
+
+                // Новые свойства для механики задержки каста (W, R)
+                this.isCasting = false; 
+                this.castTimer = 0;
+                this.pendingCast = null; // { key: string, target: Vector2 }
+
+                this.abilities = {
+                    Q: { cd: 0, maxCd: 10000, manaCost: 50, desc: 'Полное Исцеление (Мгновенный)' },
+                    W: { cd: 0, maxCd: 15000, manaCost: 100, desc: 'Метеор (0.5с Каст)' }, 
+                    E: { cd: 0, maxCd: 20000, manaCost: 120, desc: 'Призыв Союзников (Мгновенное)' },
+                    R: { cd: 0, maxCd: 30000, manaCost: 200, desc: 'Ультимативный Удар (0.5с Каст)' },
+                    D: { cd: 0, maxCd: 60000, manaCost: 250, desc: 'Сильный Союзник', available: false }
+                };
+
+                this.items = [];
+            }
+            
+            takeDamage(damage) {
+                this.hp -= damage;
+                if (this.hp <= 0 && !this.isDead) {
+                    this.isDead = true;
+                    this.respawnTimer = this.respawnTime;
+                    showMessage('Герой убит! Возрождение через 3 секунды.', 'text-red-500');
+                    return true;
+                }
+                return false;
+            }
+
+
+            update(dt) {
+                if (this.isDead) {
+                    this.respawnTimer = Math.max(0, this.respawnTimer - dt);
+                    if (this.respawnTimer === 0) {
+                        this.isDead = false;
+                        this.hp = this.maxHp;
+                        this.mana = this.maxMana;
+                        this.position = new Vector2(RADIANT_THRONE.x, RADIANT_THRONE.y); 
+                        this.targetPosition = new Vector2(RADIANT_THRONE.x, RADIANT_THRONE.y);
+                        showMessage('Герой возродился!', 'text-blue-500');
+                    }
+                    return;
+                }
+
+                // --- ЛОГИКА КАСТА С ЗАДЕРЖКОЙ (0.5с) ---
+                if (this.isCasting) {
+                    this.castTimer = Math.max(0, this.castTimer - dt);
+
+                    if (this.castTimer === 0 && this.pendingCast) {
+                        // FIX: Сохраняем ключ способности перед обнулением this.pendingCast
+                        // ЭТО ИСПРАВЛЯЕТ ОШИБКУ "Cannot read properties of null (reading 'key')"
+                        const castKey = this.pendingCast.key;
+                        
+                        // Выполнение способности после задержки
+                        this.executeCast(castKey, this.pendingCast.target);
+                        this.isCasting = false;
+                        this.pendingCast = null; 
+                        
+                        // Используем сохраненный ключ для сообщения
+                        showMessage(`Способность ${castKey} применена!`, 'text-green-400');
+                    }
+                    // Герой не двигается и не атакует, пока isCasting = true
+                    return; 
+                }
+                // --- КОНЕЦ ЛОГИКИ КАСТА ---
+
+                // Восстановление HP/Mana
+                this.hp = Math.min(this.maxHp, this.hp + 5 * (dt / 1000));
+                this.mana = Math.min(this.maxMana, this.mana + 3 * (dt / 1000));
+
+                // Обновление перезарядки
+                for (const key in this.abilities) {
+                    this.abilities[key].cd = Math.max(0, this.abilities[key].cd - dt);
+                }
+
+                // Движение
+                const dist = this.position.distanceTo(this.targetPosition);
+                if (dist > 5) {
+                    const direction = new Vector2(
+                        this.targetPosition.x - this.position.x,
+                        this.targetPosition.y - this.position.y
+                    ).normalize();
+                    this.position.x += direction.x * this.moveSpeed * (dt / 1000);
+                    this.position.y += direction.y * this.moveSpeed * (dt / 1000);
+                }
+
+                // Авто-атака (если не двигаемся)
+                const closestEnemy = entities.filter(e => e.team !== TEAM_RADIANT && e.hp > 0 && !(e instanceof Tower))
+                    .sort((a, b) => this.position.distanceTo(a.position) - this.position.distanceTo(b.position))[0];
+
+                if (closestEnemy && this.position.distanceTo(closestEnemy.position) <= this.attackRange && dist < 5) {
+                    if (this.attackCooldown === 0) {
+                        this.attack(closestEnemy);
+                        this.attackCooldown = 1200;
+                    }
+                }
+                this.attackCooldown = Math.max(0, this.attackCooldown - dt);
+            }
+
+            // Мгновенные способности (Q, E, D)
+            castAbility(key, targetPosition) {
+                const ability = this.abilities[key];
+                
+                // Проверка доступности D
+                if (!ability.available && key === 'D') {
+                    showMessage('Способность D недоступна. Купите "Свиток Призыва"', 'text-yellow-400');
+                    return false;
+                }
+                
+                // Проверка маны и КД
+                if (ability.cd > 0 || this.mana < ability.manaCost) {
+                    showMessage(`Не хватает маны или способность не перезарядилась. (Осталось ${Math.ceil(ability.cd / 1000)}с)`, 'text-red-500');
+                    return false;
+                }
+                if (this.isDead || this.isCasting) {
+                    showMessage('Герой занят и не может использовать способности.', 'text-red-500');
+                    return false;
+                }
+
+                this.mana -= ability.manaCost;
+                ability.cd = ability.maxCd;
+                
+                // Для Q, E, D: герой продолжает двигаться (this.targetPosition не меняется)
+
+                switch (key) {
+                    case 'Q': // Полное Исцеление
+                        this.hp = this.maxHp;
+                        showMessage('Q: Полное Исцеление!', 'text-green-500');
+                        break;
+                    case 'E': // Призыв Союзников
+                        const numAllies = 3;
+                        for (let i = 0; i < numAllies; i++) {
+                            const offset = 50;
+                            const allyX = this.position.x + (Math.random() * offset) - (offset / 2);
+                            const allyY = this.position.y + (Math.random() * offset) - (offset / 2);
+
+                            entities.push(new AllyCreep({ x: allyX, y: allyY }));
+                        }
+                        showMessage(`E: Призвано ${numAllies} союзников, нацеленных на башни!`, 'text-purple-400');
+                        break;
+                    case 'D': // Призыв Сильного Союзника
+                        entities.push(new StrongAllyCreep({ x: this.position.x, y: this.position.y }));
+                        showMessage('D: Призван Сильный Союзник!', 'text-orange-400');
+                        break;
+                }
+                return true;
+            }
+
+            // Исполнение способностей W и R после задержки каста
+            executeCast(key, targetPosition) {
+                if (key === 'W') { 
+                    // W: Метеор Смерти
+                    const AOE_RADIUS_W = 150;
+                    const targetsW = entities.filter(e => e.team === TEAM_DIRE && targetPosition.distanceTo(e.position) < AOE_RADIUS_W && (e instanceof Creep || e instanceof AllyCreep));
+
+                    targetsW.forEach(c => {
+                        const isDead = c.takeDamage(99999);
+                        if (isDead) this.onKill(c, true);
+                    });
+
+                    delayedEffects.push({
+                        position: targetPosition,
+                        radius: AOE_RADIUS_W,
+                        // ИСПРАВЛЕНИЕ: Используем gameTime вместо Date.now()
+                        time: gameTime + 500, 
+                        color: 'rgba(255, 100, 0, 0.9)',
+                        type: 'meteor_strike'
+                    });
+                } else if (key === 'R') { 
+                    // R: Ультимативный Удар
+                    const AOE_RADIUS_R = 200;
+                    const TOWER_DMG = 500;
+                    const HERO_CREEP_DMG = this.attackDamage * 5;
+
+                    // Урон по структурам
+                    towers.filter(t => t.team === TEAM_DIRE && targetPosition.distanceTo(t.position) < AOE_RADIUS_R && t.hp > 0)
+                        .forEach(t => t.takeDamage(TOWER_DMG));
+
+                    if (targetPosition.distanceTo(DIRE_THRONE) < AOE_RADIUS_R + DIRE_THRONE.size) {
+                         DIRE_THRONE.hp = Math.max(0, DIRE_THRONE.hp - TOWER_DMG);
+                    }
+
+                    // Урон по юнитам
+                    entities.filter(e => e.team !== TEAM_RADIANT && targetPosition.distanceTo(e.position) < AOE_RADIUS_R)
+                        .forEach(e => e.takeDamage(HERO_CREEP_DMG));
+
+                    delayedEffects.push({
+                        position: targetPosition,
+                        radius: AOE_RADIUS_R,
+                        // ИСПРАВЛЕНИЕ: Используем gameTime вместо Date.now()
+                        time: gameTime + 1000,
+                        color: 'rgba(0, 255, 255, 0.5)',
+                        type: 'ultimate_strike'
+                    });
+                }
+            }
+
+            onKill(target, isLastHit) {
+                const isNeutral = target.team === 'neutral';
+                
+                if (isNeutral) {
+                    this.gold += target.goldValue;
+                    this.exp += target.expValue;
+                } else if (isLastHit) {
+                    this.gold += target.goldValue;
+                } else {
+                    this.gold += Math.floor(target.goldValue / 5);
+                }
+
+                this.exp += target.expValue;
+                this.checkLevelUp();
+            }
+
+            checkLevelUp() {
+                if (this.exp >= this.expToNextLevel && this.level < 25) {
+                    this.level++;
+                    this.exp -= this.expToNextLevel;
+                    this.expToNextLevel = Math.floor(this.expToNextLevel * 1.3);
+                    this.maxHp += 80; this.maxMana += 50;
+                    this.hp = this.maxHp; this.mana = this.maxMana;
+                    this.attackDamage += 8;
+                    showMessage(`Уровень ${this.level}! Характеристики улучшены.`, 'text-blue-400');
+                }
+            }
+
+            draw() {
+                if (this.isDead) {
+                    ctx.fillStyle = `rgba(255, 255, 255, 0.5)`;
+                    ctx.font = '20px Inter';
+                    ctx.textAlign = 'center';
+                    ctx.fillText(`${Math.ceil(this.respawnTimer / 1000)}`, RADIANT_THRONE.x, RADIANT_THRONE.y + 10);
+                    return;
+                }
+
+                ctx.fillStyle = '#00b0ff';
+                ctx.beginPath();
+                ctx.arc(this.position.x, this.position.y, this.radius, 0, Math.PI * 2);
+                ctx.fill();
+
+                ctx.strokeStyle = '#fff';
+                ctx.lineWidth = 1;
+                ctx.stroke();
+                
+                // Индикатор каста
+                if (this.isCasting) {
+                    const progress = this.castTimer / 500; // 0.5s = 500ms
+                    ctx.strokeStyle = '#ffcc00';
+                    ctx.lineWidth = 3;
+                    ctx.beginPath();
+                    ctx.arc(this.position.x, this.position.y, this.radius + 5, 0, Math.PI * 2 * (1 - progress));
+                    ctx.stroke();
+                }
+
+                this.drawHealthBar();
+                this.drawManaBar();
+            }
+
+            drawManaBar() {
+                const barWidth = this.radius * 2;
+                const barHeight = 4;
+                const manaRatio = this.mana / this.maxMana;
+
+                ctx.fillStyle = 'black';
+                ctx.fillRect(this.position.x - this.radius, this.position.y - this.radius - 2 * barHeight - 4, barWidth, barHeight);
+
+                ctx.fillStyle = '#4299e1';
+                ctx.fillRect(this.position.x - this.radius, this.position.y - this.radius - 2 * barHeight - 4, barWidth * manaRatio, barHeight);
+            }
+
+            attack(target) {
+                let isDead;
+                const targetIsCreep = target instanceof Creep;
+                const targetIsNeutral = target.team === 'neutral';
+
+                if (target.team === TEAM_DIRE || targetIsNeutral) {
+                    isDead = target.takeDamage(this.attackDamage);
+
+                    if (isDead) {
+                        this.onKill(target, true);
+                    } else if (targetIsCreep && target.hp < this.attackDamage) {
+                         // Денай не реализован
+                    } else {
+                        this.onKill(target, false);
+                    }
+                } else if (target.team === TEAM_RADIANT && targetIsCreep) {
+                    // Денай
+                    isDead = target.takeDamage(this.attackDamage);
+                    if (isDead) {
+                        this.exp += target.expValue / 2;
+                        this.checkLevelUp();
+                        showMessage('Денай!', 'text-purple-400');
+                    }
+                }
+
+                projectiles.push({
+                    start: new Vector2(this.position.x, this.position.y),
+                    end: new Vector2(target.position.x, target.position.y),
+                    color: '#00b0ff',
+                    time: 0,
+                    duration: 100
+                });
+            }
+        }
+
+        // --- Инициализация ---
+
+        function initializeGame() {
+            // Сброс состояния
+            gameActive = true;
+            entities = [];
+            projectiles = [];
+            towers = [];
+            delayedEffects = [];
+            lastSpawnTime = 0;
+            gameTime = 0; // Сброс времени игры
+            
+            DIRE_THRONE.hp = DIRE_THRONE.maxHp;
+            RADIANT_THRONE.hp = RADIANT_THRONE.maxHp;
+
+            towers = INITIAL_TOWERS.map(t => new Tower(t));
+
+            // Инициализация Героя
+            hero = new Hero({ x: RADIANT_THRONE.x, y: RADIANT_THRONE.y });
+            entities.push(hero);
+            
+            // Инициализация Нейтральных крипов (сверху карты, в центре)
+            entities.push(new NeutralCreep({ x: MAP_WIDTH / 2 - 50, y: MAP_HEIGHT / 4 }));
+            entities.push(new NeutralCreep({ x: MAP_WIDTH / 2 + 50, y: MAP_HEIGHT / 4 }));
+            
+            // Инициализация UI
+            populateShop();
+            document.getElementById('restartButton').classList.add('hidden');
+            document.getElementById('messageBox').style.display = 'none';
+
+            if (typeof gameLoop === 'function') {
+                requestAnimationFrame(gameLoop);
+            } else {
+                gameLoop(0);
+            }
+        }
+
+        // --- Функции Магазина ---
+        const SHOP_ITEMS = [
+            { id: 1, name: 'Ботинки', cost: 450, stats: { moveSpeed: 25 }, desc: '+25 к скорости бега' },
+            { id: 2, name: 'Талисман', cost: 500, stats: { maxMana: 100, mana: 100, attackDamage: 5 }, desc: '+100 Маны, +5 Урона' },
+            { id: 3, name: 'Кольцо Здоровья', cost: 800, stats: { maxHp: 200, hp: 200 }, desc: '+200 Здоровья' },
+            { id: 4, name: 'Свиток Призыва', cost: 1500, stats: { abilityD: true }, desc: 'Дает способность "Сильный Союзник" (D)' },
+        ];
+
+        function populateShop() {
+            const shopItemsDiv = document.getElementById('shopItems');
+            shopItemsDiv.innerHTML = '';
+            SHOP_ITEMS.forEach(item => {
+                const itemDiv = document.createElement('div');
+                itemDiv.className = 'flex justify-between items-center bg-gray-600 p-2 rounded-md';
+                itemDiv.innerHTML = `
+                    <div>
+                        <p class="font-bold">${item.name} <span class="text-xs text-gray-400">(${item.desc})</span></p>
+                        <p class="text-yellow-400 text-sm">${item.cost} G</p>
+                    </div>
+                    <button onclick="buyItem(${item.id})" class="buy-button bg-green-500 hover:bg-green-600 text-white text-sm font-semibold py-1 px-3 rounded-md transition duration-150">Купить</button>
+                `;
+                shopItemsDiv.appendChild(itemDiv);
+            });
+        }
+
+        function buyItem(itemId) {
+            const item = SHOP_ITEMS.find(i => i.id === itemId);
+            if (item && hero.gold >= item.cost) {
+                hero.gold -= item.cost;
+                hero.items.push(item.name);
+                for (const stat in item.stats) {
+                    if (stat === 'abilityD') {
+                        hero.abilities.D.available = true;
+                    } else {
+                        hero[stat] += item.stats[stat];
+                    }
+                }
+                showMessage(`${item.name} куплен!`, 'text-lime-300');
+                updateUI();
+            } else if (item) {
+                showMessage(`Недостаточно золота для покупки ${item.name}!`, 'text-red-500');
+            }
+        }
+
+        // --- Спавн и логика крипов ---
+
+        function spawnCreepWave() {
+            // Волна Света
+            for (let i = 0; i < 3; i++) {
+                entities.push(new Creep({
+                    x: RADIANT_SPAWN.x,
+                    y: RADIANT_SPAWN.y + (i - 1) * 10,
+                    team: TEAM_RADIANT,
+                    type: i < 2 ? 'melee' : 'range'
+                }));
+            }
+            // Волна Тьмы
+            for (let i = 0; i < 3; i++) {
+                entities.push(new Creep({
+                    x: DIRE_SPAWN.x,
+                    y: DIRE_SPAWN.y + (i - 1) * 10,
+                    team: TEAM_DIRE,
+                    type: i < 2 ? 'melee' : 'range'
+                }));
+            }
+            showMessage('Крипы вышли на линию!', 'text-gray-400');
+        }
+
+        // --- Отрисовка мира и UI ---
+
+        function drawMap() {
+            // Фон линии
+            ctx.fillStyle = '#1e293b';
+            ctx.fillRect(0, LANE_Y - 20, MAP_WIDTH, 40);
+
+            // Границы
+            ctx.strokeStyle = '#4c51bf';
+            ctx.lineWidth = 3;
+            ctx.beginPath();
+            ctx.moveTo(0, LANE_Y - 20);
+            ctx.lineTo(MAP_WIDTH, LANE_Y - 20);
+            ctx.moveTo(0, LANE_Y + 20);
+            ctx.lineTo(MAP_WIDTH, LANE_Y + 20);
+            ctx.stroke();
+
+            // Трон Света
+            ctx.fillStyle = RADIANT_THRONE.color;
+            ctx.fillRect(RADIANT_THRONE.x - RADIANT_THRONE.size / 2, RADIANT_THRONE.y - RADIANT_THRONE.size / 2, RADIANT_THRONE.size, RADIANT_THRONE.size);
+            // Трон Тьмы
+            ctx.fillStyle = DIRE_THRONE.color;
+            ctx.fillRect(DIRE_THRONE.x - DIRE_THRONE.size / 2, DIRE_THRONE.y - DIRE_THRONE.size / 2, DIRE_THRONE.size, DIRE_THRONE.size);
+        }
+
+        function drawTowers() {
+            towers.filter(t => t.hp > 0).forEach(t => t.draw());
+            
+            // Отрисовка здоровья Тронов
+            const drawThroneHealth = (throne) => {
+                const barWidth = 60;
+                const barHeight = 8;
+                const healthRatio = throne.hp / throne.maxHp;
+                const x = throne.x - barWidth / 2;
+                const y = throne.y - throne.size / 2 - barHeight - 5;
+
+                ctx.fillStyle = 'black';
+                ctx.fillRect(x, y, barWidth, barHeight);
+                ctx.fillStyle = throne.team === TEAM_DIRE ? '#f56565' : '#48bb78';
+                ctx.fillRect(x, y, barWidth * healthRatio, barHeight);
+                
+                ctx.fillStyle = 'white';
+                ctx.font = '12px Inter';
+                ctx.textAlign = 'center';
+                ctx.fillText('ТРОН', throne.x, y - 5);
+            }
+            drawThroneHealth(RADIANT_THRONE);
+            drawThroneHealth(DIRE_THRONE);
+        }
+
+        function updateUI() {
+            const statsDiv = document.getElementById('heroStats');
+            statsDiv.innerHTML = `
+                ${hero.isDead ? 
+                    `<p class="text-red-500 font-bold">💀 Мертв. Возрождение через ${Math.ceil(hero.respawnTimer / 1000)}с</p>` 
+                    : `
+                    <p>❤️ Здоровье: ${Math.floor(hero.hp)} / ${hero.maxHp}</p>
+                    <p>💧 Мана: ${Math.floor(hero.mana)} / ${hero.maxMana}</p>
+                `}
+                <p>💰 Золото: <span class="text-yellow-400 font-semibold">${Math.floor(hero.gold)}</span></p>
+                <p>⭐ Уровень: <span class="text-blue-400 font-semibold">${hero.level}</span> (Опыт: ${hero.exp}/${hero.expToNextLevel})</p>
+                <p>⚔️ Урон: ${hero.attackDamage}</p>
+                <p>💨 Скорость: ${hero.moveSpeed}</p>
+                <p>📦 Предметы: ${hero.items.length > 0 ? hero.items.join(', ') : 'Нет'}</p>
+            `;
+
+            // Обновление КД способностей
+            for (const key in hero.abilities) {
+                const btn = document.getElementById(`ability${key}`);
+                const ability = hero.abilities[key];
+                
+                if (!btn) continue; // Пропускаем, если кнопки нет (например, D до покупки)
+
+                const cdSec = Math.ceil(ability.cd / 1000);
+                
+                if (key === 'D' && !ability.available) {
+                    btn.disabled = true;
+                    btn.innerHTML = key;
+                    btn.title = 'D: Призыв Сильного Союзника (Не куплено)';
+                    continue;
+                }
+                
+                // Проверка: мертв, кастует, КД, не хватает маны
+                const isDisabled = hero.isDead || hero.isCasting || ability.cd > 0 || hero.mana < ability.manaCost;
+
+                btn.disabled = isDisabled;
+
+                // Отображение перезарядки
+                if (ability.cd > 0) {
+                    btn.innerHTML = `<div class="cooldown-overlay">${cdSec}</div>${key}`;
+                } 
+                // Отображение индикатора каста
+                else if (hero.isCasting && hero.pendingCast && hero.pendingCast.key === key) {
+                     const castTimeLeft = (hero.castTimer / 500) * 100; // Прогресс от 0 до 100
+                     btn.innerHTML = `<div class="cast-overlay" style="clip-path: inset(0% 0% ${castTimeLeft}% 0%);">${key}</div>`;
+                }
+                else {
+                    btn.innerHTML = key;
+                }
+                
+                // Обновление title для подсказок
+                if (ability.cd > 0) {
+                     btn.title = `${ability.desc} (Осталось ${cdSec}с)`;
+                } else if (hero.mana < ability.manaCost) {
+                     btn.title = `${ability.desc} (Недостаточно маны)`;
+                } else if (hero.isCasting) {
+                     btn.title = `${ability.desc} (Герой занят)`;
+                } else {
+                     btn.title = ability.desc;
+                }
+            }
+        }
+
+        function showMessage(text, colorClass = 'text-white') {
+            const msgBox = document.getElementById('messageBox');
+            msgBox.textContent = text;
+            msgBox.className = `ui-panel w-full text-center font-bold mt-4 ${colorClass}`;
+            msgBox.style.display = 'block';
+            clearTimeout(msgBox.timer);
+            msgBox.timer = setTimeout(() => {
+                msgBox.style.display = 'none';
+            }, 3000);
+        }
+
+        // --- Главный игровой цикл ---
+        function gameLoop(time) {
+            if (!gameActive) {
+                const winText = DIRE_THRONE.hp <= 0 ? 'ПОБЕДА СВЕТА!' : 'ПОБЕДА ТЬМЫ!';
+                const winColor = DIRE_THRONE.hp <= 0 ? 'rgba(56, 161, 105, 0.8)' : 'rgba(229, 62, 62, 0.8)';
+                
+                ctx.fillStyle = winColor;
+                ctx.fillRect(0, 0, MAP_WIDTH, MAP_HEIGHT);
+                ctx.fillStyle = 'white';
+                ctx.font = '48px Inter';
+                ctx.textAlign = 'center';
+                ctx.fillText(winText, MAP_WIDTH / 2, MAP_HEIGHT / 2);
+                document.getElementById('restartButton').classList.remove('hidden');
+                return;
+            }
+
+            const dt = time - lastTime;
+            lastTime = time;
+            gameTime += dt; // ИСПРАВЛЕНИЕ: Обновляем унифицированный счетчик времени
+
+            // 1. Очистка
+            ctx.clearRect(0, 0, MAP_WIDTH, MAP_HEIGHT);
+
+            // 2. Спавн крипов
+            if (gameTime - lastSpawnTime > SPAWN_INTERVAL) { // ИСПРАВЛЕНИЕ: Используем gameTime
+                spawnCreepWave();
+                lastSpawnTime = gameTime; // ИСПРАВЛЕНИЕ: Используем gameTime
+            }
+
+            // 3. Обновление мира
+            hero.update(dt);
+            towers.forEach(t => t.update(dt));
+            entities.forEach(e => e.update(dt));
+            updateProjectiles(dt);
+            updateDelayedEffects(gameTime); // ИСПРАВЛЕНИЕ: Передаем gameTime
+            
+            // 4. Очистка мертвых
+            entities = entities.filter(e => e.hp > 0 || e instanceof Hero);
+            towers = towers.filter(t => t.hp > 0);
+
+            // Проверка на победу/поражение (Трон)
+            if (DIRE_THRONE.hp <= 0) {
+                gameActive = false;
+            } else if (RADIANT_THRONE.hp <= 0) {
+                gameActive = false;
+            }
+
+            // 5. Отрисовка
+            drawMap();
+            drawTowers();
+            entities.forEach(e => e.draw());
+            drawProjectiles();
+            drawDelayedEffects(gameTime); // ИСПРАВЛЕНИЕ: Передаем gameTime
+
+            // 6. Обновление UI
+            updateUI();
+            requestAnimationFrame(gameLoop);
+        }
+
+        // --- Дополнительные функции для отрисовки эффектов ---
+
+        function updateProjectiles(dt) {
+            projectiles = projectiles.filter(p => {
+                p.time += dt;
+                if (p.time < p.duration) {
+                    const t = p.time / p.duration;
+                    p.position = new Vector2(
+                        p.start.x + (p.end.x - p.start.x) * t,
+                        p.start.y + (p.end.y - p.start.y) * t
+                    );
+                    return true;
+                }
+                return false;
+            });
+        }
+
+        function drawProjectiles() {
+            projectiles.forEach(p => {
+                ctx.fillStyle = p.color;
+                ctx.beginPath();
+                ctx.arc(p.position.x, p.position.y, 3, 0, Math.PI * 2);
+                ctx.fill();
+            });
+        }
+
+        function updateDelayedEffects(currentTime) {
+            delayedEffects = delayedEffects.filter(effect => {
+                if (currentTime >= effect.time) {
+                    return false;
+                }
+                return true;
+            });
+        }
+
+        function drawDelayedEffects(currentTime) {
+            delayedEffects.forEach(effect => {
+                // ИСПРАВЛЕНИЕ: Используем currentTime (gameTime) для расчета оставшегося времени
+                const elapsed = effect.time - currentTime;
+                const duration = effect.type === 'meteor_strike' ? 500 : 1000;
+                // Прогресс от 0 (начало) до 1 (конец)
+                const progress = 1 - (elapsed / duration);
+
+                // Радиус должен быть положительным, ограничиваем прогресс в пределах [0, 1]
+                const clampedProgress = Math.min(1, Math.max(0, progress));
+
+                if (effect.type === 'meteor_strike') {
+                    ctx.fillStyle = `rgba(255, 69, 0, 0.8)`;
+                    ctx.beginPath();
+                    ctx.arc(effect.position.x, effect.position.y, effect.radius * clampedProgress, 0, Math.PI * 2);
+                    ctx.fill();
+                } else if (effect.type === 'ultimate_strike') {
+                    ctx.fillStyle = `rgba(0, 255, 255, 0.6)`;
+                    ctx.beginPath();
+                    ctx.arc(effect.position.x, effect.position.y, effect.radius * clampedProgress, 0, Math.PI * 2);
+                    ctx.fill();
+                }
+                
+                // Текст показывается только в начале каста (когда elapsed еще большой)
+                if (elapsed > 0 && progress < 0.5) { 
+                     ctx.fillStyle = 'white';
+                     ctx.font = '16px Inter';
+                     ctx.textAlign = 'center';
+                     ctx.fillText(`УДАР!`, effect.position.x, effect.position.y + 5);
+                }
+            });
+        }
+
+
+        // --- Обработка ввода ---
+
+        let castingAbility = null; // Хранит ключ способности W/R, ожидающей цель
+
+        canvas.addEventListener('click', (e) => {
+            const rect = canvas.getBoundingClientRect();
+            const x = e.clientX - rect.left;
+            const y = e.clientY - rect.top;
+            const clickPos = new Vector2(x, y);
+
+            if (hero.isDead || hero.isCasting) return; // Нельзя кликать, если мертв или кастуешь
+
+            if (castingAbility) {
+                // --- ЛОГИКА НАЧАЛА КАСТА W/R (после клика по цели) ---
+                const key = castingAbility;
+                const ability = hero.abilities[key];
+                
+                // Предварительная проверка (Мана/КД)
+                if (ability.cd > 0 || hero.mana < ability.manaCost) {
+                    showMessage(`Не хватает маны или способность не перезарядилась.`, 'text-red-500');
+                    castingAbility = null;
+                    return;
+                }
+                
+                // Запуск последовательности каста
+                hero.mana -= ability.manaCost;
+                ability.cd = ability.maxCd;
+                
+                hero.targetPosition = hero.position; // Останавливаем героя на время каста
+                hero.isCasting = true;
+                hero.castTimer = 500; // Задержка 0.5 секунды
+                hero.pendingCast = { key: key, target: clickPos };
+
+                castingAbility = null; // Сбрасываем режим прицеливания
+                showMessage(`Начало применения ${key}... Герой стоит на месте.`, 'text-yellow-300');
+            } else {
+                // Движение
+                hero.targetPosition = clickPos;
+            }
+        });
+
+        document.addEventListener('keydown', (e) => {
+            const key = e.key.toUpperCase();
+            if (['Q', 'W', 'E', 'R', 'D'].includes(key)) {
+                e.preventDefault();
+                const ability = hero.abilities[key];
+                
+                if (!ability || hero.isDead || hero.isCasting) return;
+
+                if (key === 'W' || key === 'R') {
+                    // W и R требуют выбора цели -> Включаем режим прицеливания
+                    if (ability.cd === 0 && hero.mana >= ability.manaCost) {
+                        castingAbility = key;
+                        showMessage(`Выберите область для применения ${key} (0.5с задержка каста после клика)`, 'text-blue-500');
+                    } else {
+                        showMessage(`Не хватает маны или способность не перезарядилась. (Осталось ${Math.ceil(ability.cd / 1000)}с)`, 'text-red-500');
+                    }
+                } else {
+                    // Q, E и D применяются мгновенно
+                    hero.castAbility(key, hero.position);
+                }
+            }
+        });
+
+        // Обработка кнопок UI
+        const setupAbilityButton = (id, key) => {
+            document.getElementById(id).addEventListener('click', () => {
+                const ability = hero.abilities[key];
+
+                if (!ability.available && key === 'D') {
+                    showMessage('Способность D недоступна. Купите "Свиток Призыва"', 'text-yellow-400');
+                    return;
+                }
+                
+                if (hero.isDead || hero.isCasting || ability.cd > 0 || hero.mana < ability.manaCost) return;
+
+
+                if (key === 'W' || key === 'R') {
+                    castingAbility = key;
+                    showMessage(`Выберите область для применения ${key} (0.5с задержка каста после клика)`, 'text-blue-500');
+                } else {
+                    hero.castAbility(key, hero.position);
+                }
+            });
+        };
+
+        setupAbilityButton('abilityQ', 'Q');
+        setupAbilityButton('abilityW', 'W');
+        setupAbilityButton('abilityE', 'E');
+        setupAbilityButton('abilityR', 'R');
+        setupAbilityButton('abilityD', 'D');
+
+        function restartGame() {
+            initializeGame();
+        }
+
+        // Инициализация игры при загрузке страницы
+        window.onload = function() {
+            initializeGame();
+        }
+
+    </script>
+</body>
+</html>
